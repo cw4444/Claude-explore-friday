@@ -25,6 +25,16 @@ Usage:
 
   nexus context "Fix payment bug"
 
+  nexus identity setup --name "my-openclaw" --type openclaw
+  nexus identity show
+
+  nexus bundle export --desc "Auth learnings" --tags auth > auth-bundle.json
+  nexus bundle import auth-bundle.json
+  nexus bundle info auth-bundle.json
+
+  nexus growth
+  nexus growth --periods 4 --period-days 30
+
   nexus stats
 """
 
@@ -39,6 +49,9 @@ from .memory import MemoryStore, MemoryType
 from .tasks import TaskGraph, TaskStatus, Priority
 from .reflection import ReflectionEngine, Outcome
 from .context import ContextManager
+from .identity import get_or_create_identity, load_identity, save_identity, AGENT_TYPES, auto_detect_type
+from .bundle import BundleExporter, BundleImporter, KnowledgeBundle
+from .growth import GrowthTracker
 
 
 def _priority(s: str) -> Priority:
@@ -310,6 +323,95 @@ def cmd_stats(args, cm: ContextManager):
 
 
 # ---------------------------------------------------------------------------
+# Identity commands
+# ---------------------------------------------------------------------------
+
+def cmd_identity_show(args):
+    identity = load_identity()
+    if not identity:
+        print("No identity configured. Run: nexus identity setup --name <name> --type <type>")
+        return
+    print(f"ID:         {identity.id}")
+    print(f"Name:       {identity.name}")
+    print(f"Type:       {identity.agent_type} ({AGENT_TYPES.get(identity.agent_type, 'custom')})")
+    print(f"Sessions:   {identity.session_count}")
+    print(f"First seen: {time.strftime('%Y-%m-%d', time.localtime(identity.created_at))}")
+    print(f"Last seen:  {time.strftime('%Y-%m-%d', time.localtime(identity.last_seen))}")
+
+
+def cmd_identity_setup(args):
+    detected = auto_detect_type()
+    agent_type = args.type or detected
+    name = args.name or f"agent-{agent_type}"
+    identity = get_or_create_identity(name=name, agent_type=agent_type)
+    print(f"Identity configured: {identity.display}")
+
+
+# ---------------------------------------------------------------------------
+# Bundle commands
+# ---------------------------------------------------------------------------
+
+def cmd_bundle_export(args, cm: ContextManager, identity):
+    exporter = BundleExporter(db_path=args.db, identity=identity)
+    since = time.time() - args.since_days * 86400 if args.since_days else None
+    bundle = exporter.export(
+        description=args.desc or "",
+        tags=_tags(args.tags) if args.tags else None,
+        since=since,
+        min_importance=args.min_importance,
+        include_done_tasks=args.include_done,
+    )
+    if args.output:
+        path = Path(args.output)
+        bundle.save(path)
+        print(f"Bundle saved to {path}")
+        print(bundle.summary())
+    else:
+        # Print JSON to stdout (for piping)
+        import json as _json
+        from dataclasses import asdict
+        print(_json.dumps({
+            "meta": asdict(bundle.meta),
+            "memories": bundle.memories,
+            "tasks": bundle.tasks,
+            "reflections": bundle.reflections,
+        }, indent=2, default=str))
+
+
+def cmd_bundle_import(args, cm: ContextManager, identity):
+    importer = BundleImporter(db_path=args.db, identity=identity)
+    bundle = KnowledgeBundle.load(Path(args.file))
+    print(bundle.summary())
+    print()
+    result = importer.import_bundle(
+        bundle,
+        conflict=args.conflict,
+        tag_source=not args.no_tag,
+        min_importance=args.min_importance,
+    )
+    print(result.summary())
+
+
+def cmd_bundle_info(args):
+    bundle = KnowledgeBundle.load(Path(args.file))
+    print(bundle.summary())
+
+
+# ---------------------------------------------------------------------------
+# Growth commands
+# ---------------------------------------------------------------------------
+
+def cmd_growth(args):
+    gt = GrowthTracker(db_path=args.db)
+    report = gt.report(periods=args.periods, period_days=args.period_days)
+    if args.json:
+        import json as _json
+        print(_json.dumps(report.to_dict(), indent=2, default=str))
+    else:
+        print(report.summary())
+
+
+# ---------------------------------------------------------------------------
 # Parser assembly
 # ---------------------------------------------------------------------------
 
@@ -432,6 +534,58 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("stats", help="Overall statistics")
 
     # ------------------------------------------------------------------
+    # identity
+    # ------------------------------------------------------------------
+    id_p = sub.add_parser("identity", help="Agent identity commands")
+    id_sub = id_p.add_subparsers(dest="id_cmd", required=True)
+
+    id_sub.add_parser("show", help="Show current agent identity")
+
+    id_setup = id_sub.add_parser("setup", help="Configure agent identity")
+    id_setup.add_argument("--name", default=None, help="Agent name")
+    id_setup.add_argument("--type", default=None,
+                          choices=list(AGENT_TYPES.keys()),
+                          help="Agent type")
+
+    # ------------------------------------------------------------------
+    # bundle
+    # ------------------------------------------------------------------
+    bun_p = sub.add_parser("bundle", help="Knowledge bundle import/export")
+    bun_sub = bun_p.add_subparsers(dest="bun_cmd", required=True)
+
+    bex = bun_sub.add_parser("export", help="Export a knowledge bundle")
+    bex.add_argument("--desc", default="", help="Bundle description")
+    bex.add_argument("--tags", default=None, help="Comma-separated tags to filter by")
+    bex.add_argument("--since-days", type=float, default=None,
+                     help="Only include records from the last N days")
+    bex.add_argument("--min-importance", type=float, default=0.0)
+    bex.add_argument("--include-done", action="store_true",
+                     help="Include completed tasks")
+    bex.add_argument("--output", "-o", default=None,
+                     help="Output file (default: stdout)")
+
+    bim = bun_sub.add_parser("import", help="Import a knowledge bundle")
+    bim.add_argument("file", help="Bundle JSON file to import")
+    bim.add_argument("--conflict", choices=["skip", "overwrite", "merge"],
+                     default="skip")
+    bim.add_argument("--no-tag", action="store_true",
+                     help="Don't tag imported records with source agent")
+    bim.add_argument("--min-importance", type=float, default=0.0)
+
+    binfo = bun_sub.add_parser("info", help="Inspect a bundle file without importing")
+    binfo.add_argument("file")
+
+    # ------------------------------------------------------------------
+    # growth
+    # ------------------------------------------------------------------
+    grow_p = sub.add_parser("growth", help="Agent growth analytics")
+    grow_p.add_argument("--periods", type=int, default=7,
+                        help="Number of time periods to show (default: 7)")
+    grow_p.add_argument("--period-days", type=float, default=7.0,
+                        help="Length of each period in days (default: 7)")
+    grow_p.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # ------------------------------------------------------------------
     # mcp
     # ------------------------------------------------------------------
     sub.add_parser(
@@ -451,6 +605,7 @@ def main():
     mem = cm.memory
     tg  = cm.tasks
     re  = cm.reflection
+    identity = load_identity()
 
     if args.command == "mem":
         dispatch = {
@@ -491,6 +646,23 @@ def main():
 
     elif args.command == "stats":
         cmd_stats(args, cm)
+
+    elif args.command == "identity":
+        if args.id_cmd == "show":
+            cmd_identity_show(args)
+        elif args.id_cmd == "setup":
+            cmd_identity_setup(args)
+
+    elif args.command == "bundle":
+        dispatch = {
+            "export": lambda a: cmd_bundle_export(a, cm, identity),
+            "import": lambda a: cmd_bundle_import(a, cm, identity),
+            "info":   cmd_bundle_info,
+        }
+        dispatch[args.bun_cmd](args)
+
+    elif args.command == "growth":
+        cmd_growth(args)
 
     elif args.command == "mcp":
         try:

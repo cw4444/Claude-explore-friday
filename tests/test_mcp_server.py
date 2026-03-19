@@ -38,6 +38,7 @@ def test_tool_list_via_coroutine(tmp_path):
         "nexus_task_create", "nexus_task_decompose", "nexus_task_list",
         "nexus_task_next", "nexus_task_start", "nexus_task_done",
         "nexus_task_fail", "nexus_task_note", "nexus_reflect", "nexus_stats",
+        "nexus_growth", "nexus_export_bundle", "nexus_import_bundle", "nexus_identity",
     }
     # Verify by checking that all expected tool names appear in the server module source
     import inspect

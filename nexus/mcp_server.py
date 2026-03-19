@@ -23,6 +23,7 @@ Once connected, the agent has access to:
   nexus_context       - Get a full warm-start briefing for a task
   nexus_pin           - Store a high-importance fact that always surfaces
   nexus_task_create   - Create a new task
+  nexus_task_decompose - Create a parent + sequential subtasks
   nexus_task_list     - List pending/in-progress tasks
   nexus_task_next     - Get the next ready-to-work task
   nexus_task_start    - Mark a task as in-progress
@@ -31,10 +32,15 @@ Once connected, the agent has access to:
   nexus_task_note     - Add a note to a task
   nexus_reflect       - Record a reflection and mint a lesson as memory
   nexus_stats         - Overall statistics
+  nexus_growth        - Get growth analytics and trend assessment
+  nexus_export_bundle - Export knowledge bundle for cross-agent sharing
+  nexus_import_bundle - Import a knowledge bundle from another agent
+  nexus_identity      - Get/set agent identity
 """
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -46,6 +52,9 @@ from .context import ContextManager
 from .memory import MemoryType
 from .tasks import Priority, TaskStatus
 from .reflection import Outcome
+from .identity import load_identity, get_or_create_identity, AGENT_TYPES
+from .bundle import BundleExporter, BundleImporter, KnowledgeBundle
+from .growth import GrowthTracker
 
 
 def _fmt_memory(m) -> str:
@@ -274,6 +283,77 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                 description="Return overall statistics: memory counts, task status breakdown, reflections.",
                 inputSchema={"type": "object", "properties": {}},
             ),
+            types.Tool(
+                name="nexus_growth",
+                description=(
+                    "Get growth analytics: success rate trends, task completion velocity, "
+                    "domain depth, and recent lessons. Shows whether the agent is improving "
+                    "over time. Call this to understand your own development trajectory."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "periods":     {"type": "integer", "default": 7,
+                                        "description": "Number of time periods"},
+                        "period_days": {"type": "number", "default": 7.0,
+                                        "description": "Days per period"},
+                    },
+                },
+            ),
+            types.Tool(
+                name="nexus_export_bundle",
+                description=(
+                    "Export a portable knowledge bundle that can be imported by another agent "
+                    "(OpenClaw, Claude.ai, ChatGPT, etc). This is how knowledge crosses agent boundaries. "
+                    "Returns JSON that the receiving agent can pass to nexus_import_bundle."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "description":   {"type": "string", "default": ""},
+                        "tags":          {"type": "array", "items": {"type": "string"}},
+                        "since_days":    {"type": "number",
+                                          "description": "Only include records from last N days"},
+                        "min_importance": {"type": "number", "default": 0.0},
+                        "include_done":  {"type": "boolean", "default": False},
+                    },
+                },
+            ),
+            types.Tool(
+                name="nexus_import_bundle",
+                description=(
+                    "Import a knowledge bundle from another agent. Merges their memories, "
+                    "pending tasks, and reflections into your local Nexus. "
+                    "Pass the JSON string returned by nexus_export_bundle."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "bundle_json":    {"type": "string",
+                                           "description": "JSON string of the knowledge bundle"},
+                        "conflict":       {"type": "string", "enum": ["skip", "overwrite"],
+                                           "default": "skip"},
+                        "min_importance": {"type": "number", "default": 0.0},
+                    },
+                    "required": ["bundle_json"],
+                },
+            ),
+            types.Tool(
+                name="nexus_identity",
+                description=(
+                    "Get or set this agent's identity (name and type). "
+                    "Identity is stamped on all exported bundles so receivers know the provenance. "
+                    "Call without arguments to get current identity."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name":       {"type": "string"},
+                        "agent_type": {"type": "string",
+                                       "description": "e.g. claude-code, openclaw, chatgpt, api"},
+                    },
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -421,6 +501,72 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                     for outcome, count in rs["by_outcome"].items():
                         lines.append(f"  {outcome:10s}: {count}")
                 return text("\n".join(lines))
+
+            elif name == "nexus_growth":
+                gt = GrowthTracker(db_path=db_path)
+                report = gt.report(
+                    periods=arguments.get("periods", 7),
+                    period_days=arguments.get("period_days", 7.0),
+                )
+                return text(report.summary())
+
+            elif name == "nexus_export_bundle":
+                identity = load_identity()
+                exporter = BundleExporter(db_path=db_path, identity=identity)
+                since = (time.time() - arguments["since_days"] * 86400
+                         if "since_days" in arguments else None)
+                bundle = exporter.export(
+                    description=arguments.get("description", ""),
+                    tags=arguments.get("tags"),
+                    since=since,
+                    min_importance=arguments.get("min_importance", 0.0),
+                    include_done_tasks=arguments.get("include_done", False),
+                )
+                import dataclasses
+                bundle_dict = {
+                    "meta": dataclasses.asdict(bundle.meta),
+                    "memories": bundle.memories,
+                    "tasks": bundle.tasks,
+                    "reflections": bundle.reflections,
+                }
+                return text(json.dumps(bundle_dict, indent=2, default=str))
+
+            elif name == "nexus_import_bundle":
+                identity = load_identity()
+                importer = BundleImporter(db_path=db_path, identity=identity)
+                bundle_data = json.loads(arguments["bundle_json"])
+                from .bundle import BundleMeta
+                import dataclasses
+                meta = BundleMeta(**bundle_data["meta"])
+                bundle = KnowledgeBundle(
+                    meta=meta,
+                    memories=bundle_data.get("memories", []),
+                    tasks=bundle_data.get("tasks", []),
+                    reflections=bundle_data.get("reflections", []),
+                )
+                result = importer.import_bundle(
+                    bundle,
+                    conflict=arguments.get("conflict", "skip"),
+                    min_importance=arguments.get("min_importance", 0.0),
+                )
+                return text(result.summary())
+
+            elif name == "nexus_identity":
+                name_arg = arguments.get("name")
+                type_arg = arguments.get("agent_type")
+                if name_arg or type_arg:
+                    identity = get_or_create_identity(name=name_arg, agent_type=type_arg)
+                    return text(f"Identity updated: {identity.display}")
+                else:
+                    identity = load_identity()
+                    if not identity:
+                        return text("No identity configured. Call nexus_identity with name and agent_type.")
+                    return text(
+                        f"ID:       {identity.id}\n"
+                        f"Name:     {identity.name}\n"
+                        f"Type:     {identity.agent_type} ({AGENT_TYPES.get(identity.agent_type, 'custom')})\n"
+                        f"Sessions: {identity.session_count}"
+                    )
 
             else:
                 return text(f"Unknown tool: {name}")
