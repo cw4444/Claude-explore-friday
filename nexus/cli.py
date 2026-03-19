@@ -431,6 +431,15 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     sub.add_parser("stats", help="Overall statistics")
 
+    # ------------------------------------------------------------------
+    # mcp
+    # ------------------------------------------------------------------
+    sub.add_parser(
+        "mcp",
+        help="Start the Nexus MCP server (stdio transport). "
+             "Add to Claude Code or Claude.ai MCP settings to share memory across interfaces.",
+    )
+
     return p
 
 
@@ -482,6 +491,14 @@ def main():
 
     elif args.command == "stats":
         cmd_stats(args, cm)
+
+    elif args.command == "mcp":
+        try:
+            from .mcp_server import run_server
+        except ImportError:
+            print("MCP server requires the 'mcp' package: pip install 'nexus-agent[mcp]'")
+            sys.exit(1)
+        run_server(db_path=args.db)
 
 
 if __name__ == "__main__":

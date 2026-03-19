@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "nexus": {
+      "command": "nexus",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}
