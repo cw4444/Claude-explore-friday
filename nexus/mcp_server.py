@@ -40,6 +40,12 @@ Once connected, the agent has access to:
   nexus_snapshot_list    - List available snapshots
   nexus_snapshot_restore - Restore state from a snapshot
   nexus_snapshot_diff    - Show what changed since a snapshot
+  nexus_knowledge_apply     - Install tiered knowledge into memory
+  nexus_knowledge_status    - Show knowledge tier installation status
+  nexus_knowledge_contribute - Add a new knowledge entry (with provenance)
+  nexus_knowledge_review    - Review an entry (triggers auto-promotion)
+  nexus_knowledge_inspect   - Inspect entries in a tier before applying
+  nexus_knowledge_list      - List all knowledge entries
 """
 
 import asyncio
@@ -660,6 +666,126 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                     "required": ["content"],
                 },
             ),
+            # Knowledge tier tools
+            types.Tool(
+                name="nexus_knowledge_apply",
+                description=(
+                    "Install tiered knowledge into your memory. Applies canon, field, "
+                    "procedure, and warning entries by default. Quarantine entries are "
+                    "never auto-applied - use nexus_knowledge_inspect first. "
+                    "Idempotent: already-installed entries are skipped. "
+                    "Run at session start after nexus_bootstrap."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "tiers": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Tiers to apply (default: canon, field, procedure, warning). "
+                                           "Pass ['quarantine'] to explicitly apply quarantine entries.",
+                        },
+                        "min_trust": {
+                            "type": "number", "minimum": 0, "maximum": 1, "default": 0.0,
+                            "description": "Skip entries below this trust score.",
+                        },
+                    },
+                },
+            ),
+            types.Tool(
+                name="nexus_knowledge_status",
+                description="Show which knowledge tiers are installed and how many entries each has.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            types.Tool(
+                name="nexus_knowledge_contribute",
+                description=(
+                    "Contribute a new knowledge entry. Defaults to 'field' tier. "
+                    "Use tier='quarantine' for unverified external content. "
+                    "The entry is saved locally and immediately available to you. "
+                    "To share with future agents: commit the knowledge.json file.\n\n"
+                    "Tier guide:\n"
+                    "  field     - Useful lessons from real work, provisional\n"
+                    "  procedure - How to do a specific task in this repo/org (set applies_to)\n"
+                    "  warning   - Known failure, trap, or suspicious pattern\n"
+                    "  quarantine - Unverified, needs review before others see it"
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "content":    {"type": "string", "description": "The knowledge content"},
+                        "tier":       {"type": "string", "default": "field",
+                                       "enum": ["field", "procedure", "warning", "quarantine"]},
+                        "importance": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.8},
+                        "tags":       {"type": "array", "items": {"type": "string"}, "default": []},
+                        "applies_to": {
+                            "type": "array", "items": {"type": "string"}, "default": [],
+                            "description": "Scope list: ['repo:owner/name'] or ['org:owner']. "
+                                           "Leave empty for universal entries.",
+                        },
+                    },
+                    "required": ["content"],
+                },
+            ),
+            types.Tool(
+                name="nexus_knowledge_review",
+                description=(
+                    "Review a knowledge entry. Agents and humans can both review.\n\n"
+                    "Quarantine auto-promotion rules:\n"
+                    "  1 human promote  → promoted to field (or to_tier if specified)\n"
+                    "  2 agent promotes → promoted to field\n"
+                    "  1 human reject   → entry rejected\n"
+                    "  2 agent rejects  → entry rejected\n\n"
+                    "For non-quarantine entries: explicit to_tier required to change tier."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "entry_id": {"type": "string", "description": "Entry ID or 8-char prefix"},
+                        "verdict":  {"type": "string", "enum": ["promote", "reject"]},
+                        "to_tier":  {"type": "string",
+                                     "description": "Target tier for promotion (optional)"},
+                        "note":     {"type": "string", "default": "", "description": "Review note"},
+                    },
+                    "required": ["entry_id", "verdict"],
+                },
+            ),
+            types.Tool(
+                name="nexus_knowledge_inspect",
+                description=(
+                    "Inspect entries in a tier before applying. Use this to review "
+                    "quarantine entries before deciding to promote or reject them. "
+                    "Returns full provenance: who contributed it, when, trust score, reviews."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "tier": {
+                            "type": "string", "default": "quarantine",
+                            "enum": ["field", "procedure", "warning", "quarantine"],
+                            "description": "Tier to inspect",
+                        },
+                    },
+                },
+            ),
+            types.Tool(
+                name="nexus_knowledge_list",
+                description="List all knowledge entries, optionally filtered by tier.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "tier": {
+                            "type": "string",
+                            "description": "Filter by tier (canon/field/procedure/warning/quarantine). "
+                                           "Omit for all.",
+                        },
+                        "include_rejected": {
+                            "type": "boolean", "default": False,
+                            "description": "Include rejected entries",
+                        },
+                    },
+                },
+            ),
             types.Tool(
                 name="nexus_handoff_apply",
                 description=(
@@ -977,6 +1103,98 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                         f"Lesson: {entry['content'][:120]}\n\n"
                         f"To share with future agents: commit the contributions file to the repo."
                     )
+
+            elif name in ("nexus_knowledge_apply", "nexus_knowledge_status",
+                          "nexus_knowledge_contribute", "nexus_knowledge_review",
+                          "nexus_knowledge_inspect", "nexus_knowledge_list"):
+                from .knowledge import KnowledgeStore
+                ks = KnowledgeStore(db_path=db_path)
+                if name == "nexus_knowledge_apply":
+                    tiers = arguments.get("tiers") or None
+                    min_trust = float(arguments.get("min_trust", 0.0))
+                    result = ks.apply(cm, tiers=tiers, min_trust=min_trust)
+                    lines = [result.summary(), ""]
+                    status = ks.status(cm)
+                    for tier, info in status.items():
+                        if info["total"] == 0:
+                            continue
+                        check = "complete" if info["complete"] else f"{info['installed']}/{info['total']}"
+                        lines.append(f"  {tier}: {check}")
+                    return text("\n".join(lines))
+                elif name == "nexus_knowledge_status":
+                    status = ks.status(cm)
+                    lines = ["Knowledge status:"]
+                    for tier, info in status.items():
+                        if info["total"] == 0:
+                            continue
+                        check = "✓ complete" if info["complete"] else f"{info['installed']}/{info['total']} installed"
+                        lines.append(f"  {tier:12s} {check}")
+                    return text("\n".join(lines))
+                elif name == "nexus_knowledge_contribute":
+                    entry = ks.contribute(
+                        content=arguments["content"],
+                        tier=arguments.get("tier", "field"),
+                        importance=float(arguments.get("importance", 0.8)),
+                        tags=arguments.get("tags", []),
+                        applies_to=arguments.get("applies_to", []),
+                        cm=cm,
+                    )
+                    return text(
+                        f"Knowledge entry contributed.\n"
+                        f"  ID:    {entry.id[:8]}\n"
+                        f"  Tier:  {entry.tier}\n"
+                        f"  Trust: {entry.trust_score:.2f}\n"
+                        f"  Content: {entry.content[:120]}\n\n"
+                        f"To share with future agents: commit knowledge.json to the repo."
+                    )
+                elif name == "nexus_knowledge_review":
+                    updated = ks.review(
+                        arguments["entry_id"],
+                        verdict=arguments["verdict"],
+                        to_tier=arguments.get("to_tier"),
+                        note=arguments.get("note", ""),
+                    )
+                    if updated is None:
+                        return text(f"Entry not found or is read-only: {arguments['entry_id']}")
+                    lines = [
+                        f"Review recorded.",
+                        f"  ID:    {updated.id[:8]}",
+                        f"  Tier:  {updated.tier}",
+                        f"  Trust: {updated.trust_score:.2f}",
+                    ]
+                    if updated.rejected:
+                        lines.append(f"  Status: REJECTED - {updated.rejection_reason}")
+                    return text("\n".join(lines))
+                elif name == "nexus_knowledge_inspect":
+                    tier = arguments.get("tier", "quarantine")
+                    entries = ks.inspect(tier=tier)
+                    if not entries:
+                        return text(f"No entries in tier '{tier}'.")
+                    lines = [f"Entries in '{tier}' ({len(entries)}):"]
+                    for e in entries:
+                        lines.append(f"\n  [{e.id[:8]}]")
+                        lines.append(f"  Content:  {e.content[:120]}")
+                        lines.append(f"  Trust:    {e.trust_score:.2f}")
+                        lines.append(f"  Author:   {e.author.get('name','?')} "
+                                     f"[{e.author.get('agent_type','?')}]")
+                        if e.applies_to:
+                            lines.append(f"  Scope:    {', '.join(e.applies_to)}")
+                        lines.append(f"  Reviews:  {len(e.reviews)}")
+                        for r in e.reviews:
+                            lines.append(f"    - {r.get('reviewer_name','?')} "
+                                         f"[{r.get('reviewer_agent_type','?')}]: "
+                                         f"{r.get('verdict','?')} | {r.get('note','')}")
+                    return text("\n".join(lines))
+                elif name == "nexus_knowledge_list":
+                    tier_filter = arguments.get("tier")
+                    include_rejected = bool(arguments.get("include_rejected", False))
+                    entries = ks.all(tier=tier_filter, include_rejected=include_rejected)
+                    if not entries:
+                        return text("No knowledge entries.")
+                    lines = [f"Knowledge entries ({len(entries)}):"]
+                    for e in entries:
+                        lines.append(f"  {e.display()}")
+                    return text("\n".join(lines))
 
             elif name in ("nexus_snapshot_create", "nexus_snapshot_list",
                           "nexus_snapshot_restore", "nexus_snapshot_diff"):

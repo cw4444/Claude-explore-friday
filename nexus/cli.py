@@ -58,6 +58,7 @@ from .github_sync import GitHubSync
 from .handoff import HandoffManager
 from .snapshots import SnapshotManager
 from .bootstrap import BootstrapManager
+from .knowledge import KnowledgeStore
 
 
 def _priority(s: str) -> Priority:
@@ -828,6 +829,55 @@ def build_parser() -> argparse.ArgumentParser:
     bsc.add_argument("--importance", type=float, default=0.8)
 
     # ------------------------------------------------------------------
+    # knowledge
+    # ------------------------------------------------------------------
+    kn_p = sub.add_parser("knowledge",
+                          help="Tiered knowledge system with provenance (replaces bootstrap)")
+    kn_sub = kn_p.add_subparsers(dest="kn_cmd", required=False)
+
+    kna = kn_sub.add_parser("apply", help="Install knowledge into memory (default)")
+    kna.add_argument("--tiers", default=None,
+                     help="Comma-separated tiers to apply (default: canon,field,procedure,warning)")
+    kna.add_argument("--min-trust", type=float, default=0.0,
+                     help="Minimum trust score (0.0-1.0)")
+
+    kn_sub.add_parser("status", help="Show installation status per tier")
+
+    knc = kn_sub.add_parser("contribute", help="Add a knowledge entry")
+    knc.add_argument("content", nargs="+", help="The knowledge content")
+    knc.add_argument("--tier", default="field",
+                     choices=["field", "procedure", "warning", "quarantine"],
+                     help="Knowledge tier (default: field)")
+    knc.add_argument("--importance", type=float, default=0.8)
+    knc.add_argument("--tags", default="", help="Comma-separated tags")
+    knc.add_argument("--applies-to", default="",
+                     help="Comma-separated scope: repo:owner/name or org:owner")
+
+    knr = kn_sub.add_parser("review", help="Review a knowledge entry")
+    knr.add_argument("entry_id", help="Entry ID or 8-char prefix")
+    knr.add_argument("verdict", choices=["promote", "reject"], help="Review verdict")
+    knr.add_argument("--to-tier", default=None, help="Target tier for explicit promotion")
+    knr.add_argument("--note", default="", help="Review note")
+
+    knpr = kn_sub.add_parser("promote", help="Explicitly promote an entry to a tier")
+    knpr.add_argument("entry_id", help="Entry ID or 8-char prefix")
+    knpr.add_argument("to_tier", choices=["field", "procedure", "warning", "canon"],
+                      help="Target tier")
+
+    knrj = kn_sub.add_parser("reject", help="Reject a knowledge entry")
+    knrj.add_argument("entry_id", help="Entry ID or 8-char prefix")
+    knrj.add_argument("--reason", default="", help="Rejection reason")
+
+    kni = kn_sub.add_parser("inspect", help="Inspect entries in a tier (default: quarantine)")
+    kni.add_argument("--tier", default="quarantine", choices=["field", "procedure",
+                                                               "warning", "quarantine"])
+
+    knl = kn_sub.add_parser("list", aliases=["ls"], help="List all knowledge entries")
+    knl.add_argument("--tier", default=None, help="Filter by tier")
+    knl.add_argument("--all", action="store_true", dest="include_rejected",
+                     help="Include rejected entries")
+
+    # ------------------------------------------------------------------
     sub.add_parser(
         "mcp",
         help="Start the Nexus MCP server (stdio transport). "
@@ -1074,6 +1124,87 @@ def main():
             print("To share with future agents: commit the contributions file to the repo.")
             contribs_path = bm._contrib_path()
             print(f"File: {contribs_path}")
+
+    elif args.command == "knowledge":
+        ks = KnowledgeStore(db_path=args.db)
+        kn_cmd = getattr(args, "kn_cmd", None)
+        if kn_cmd is None or kn_cmd == "apply":
+            tiers = [t.strip() for t in args.tiers.split(",")] if getattr(args, "tiers", None) else None
+            result = ks.apply(cm, tiers=tiers, min_trust=getattr(args, "min_trust", 0.0))
+            print(result.summary())
+        elif kn_cmd == "status":
+            status = ks.status(cm)
+            print("Knowledge status:")
+            for tier, info in status.items():
+                if info["total"] == 0:
+                    continue
+                check = "✓" if info["complete"] else f"{info['installed']}/{info['total']}"
+                print(f"  [{check:5s}] {tier}")
+        elif kn_cmd == "contribute":
+            content = " ".join(args.content)
+            tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else []
+            applies_to = [s.strip() for s in args.applies_to.split(",") if s.strip()] if args.applies_to else []
+            entry = ks.contribute(
+                content,
+                tier=args.tier,
+                importance=args.importance,
+                tags=tags,
+                applies_to=applies_to,
+                cm=cm,
+            )
+            print(f"Knowledge entry contributed.")
+            print(f"  ID:    {entry.id[:8]}")
+            print(f"  Tier:  {entry.tier}")
+            print(f"  Trust: {entry.trust_score:.2f}")
+            print(f"  Content: {content[:80]}")
+            local_path = ks._local_path()
+            print(f"\nTo share: commit {local_path} to the repo.")
+        elif kn_cmd == "review":
+            updated = ks.review(
+                args.entry_id,
+                verdict=args.verdict,
+                to_tier=getattr(args, "to_tier", None),
+                note=getattr(args, "note", ""),
+            )
+            if updated is None:
+                print(f"Entry not found or is read-only: {args.entry_id}")
+            else:
+                print(f"Review recorded.")
+                print(f"  ID:    {updated.id[:8]}")
+                print(f"  Tier:  {updated.tier}")
+                print(f"  Trust: {updated.trust_score:.2f}")
+                if updated.rejected:
+                    print(f"  Status: REJECTED - {updated.rejection_reason}")
+        elif kn_cmd == "promote":
+            updated = ks.promote(args.entry_id, to_tier=args.to_tier)
+            if updated is None:
+                print(f"Entry not found or is read-only: {args.entry_id}")
+            else:
+                print(f"Promoted to '{updated.tier}' (v{updated.version}).")
+        elif kn_cmd == "reject":
+            updated = ks.reject(args.entry_id, reason=getattr(args, "reason", ""))
+            if updated is None:
+                print(f"Entry not found or is read-only: {args.entry_id}")
+            else:
+                print(f"Entry rejected: {updated.id[:8]}")
+        elif kn_cmd in ("inspect",):
+            entries = ks.inspect(tier=args.tier)
+            if not entries:
+                print(f"No entries in tier '{args.tier}'.")
+            else:
+                print(f"Entries in '{args.tier}' ({len(entries)}):")
+                for e in entries:
+                    print(f"  {e.display()}")
+        elif kn_cmd in ("list", "ls"):
+            tier_filter = getattr(args, "tier", None)
+            include_rejected = getattr(args, "include_rejected", False)
+            entries = ks.all(tier=tier_filter, include_rejected=include_rejected)
+            if not entries:
+                print("No knowledge entries.")
+            else:
+                print(f"Knowledge entries ({len(entries)}):")
+                for e in entries:
+                    print(f"  {e.display()}")
 
     elif args.command == "mcp":
         try:
