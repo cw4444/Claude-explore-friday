@@ -39,6 +39,8 @@ from .memory import MemoryStore, Memory, MemoryType
 from .tasks import TaskGraph, Task, TaskStatus, Priority
 from .reflection import ReflectionEngine, Reflection, Outcome
 from .context import ContextManager, SessionContext
+from .narrative import NarrativeEngine, SelfModel, Trait
+from .relationships import RelationshipStore, Contact, Observation
 
 __all__ = [
     # Memory
@@ -49,6 +51,10 @@ __all__ = [
     "ReflectionEngine", "Reflection", "Outcome",
     # Context (primary entrypoint)
     "ContextManager", "SessionContext",
+    # Identity / narrative
+    "NarrativeEngine", "SelfModel", "Trait",
+    # Relationships
+    "RelationshipStore", "Contact", "Observation",
 ]
 
 __version__ = "0.1.0"

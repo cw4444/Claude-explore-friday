@@ -78,6 +78,35 @@ def init_schema(conn: sqlite3.Connection, fts: bool) -> None:
             effort_mins  INTEGER,
             created_at   REAL NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS contacts (
+            id                TEXT PRIMARY KEY,
+            name              TEXT NOT NULL UNIQUE,
+            contact_type      TEXT NOT NULL DEFAULT 'human'
+                              CHECK(contact_type IN ('human','agent','team')),
+            first_seen        REAL NOT NULL,
+            last_seen         REAL NOT NULL,
+            interaction_count INTEGER NOT NULL DEFAULT 0,
+            notes             TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS contact_observations (
+            id          TEXT PRIMARY KEY,
+            contact_id  TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+            category    TEXT NOT NULL
+                        CHECK(category IN ('preference','pattern','trust','context','history','warning')),
+            content     TEXT NOT NULL,
+            confidence  REAL NOT NULL DEFAULT 0.8,
+            created_at  REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS pinned_traits (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            description TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'observed',
+            created_at  REAL NOT NULL
+        );
     """)
 
     if fts:

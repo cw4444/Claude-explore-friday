@@ -52,6 +52,8 @@ from .context import ContextManager
 from .identity import get_or_create_identity, load_identity, save_identity, AGENT_TYPES, auto_detect_type
 from .bundle import BundleExporter, BundleImporter, KnowledgeBundle
 from .growth import GrowthTracker
+from .narrative import NarrativeEngine
+from .relationships import RelationshipStore, OBSERVATION_CATEGORIES
 
 
 def _priority(s: str) -> Priority:
@@ -412,6 +414,81 @@ def cmd_growth(args):
 
 
 # ---------------------------------------------------------------------------
+# Self / narrative commands
+# ---------------------------------------------------------------------------
+
+def cmd_self(args):
+    ne = NarrativeEngine(db_path=args.db)
+    model = ne.generate()
+    if args.json:
+        import json as _json
+        print(_json.dumps(model.to_dict(), indent=2, default=str))
+    else:
+        print(model.briefing())
+
+
+def cmd_self_pin(args):
+    ne = NarrativeEngine(db_path=args.db)
+    ne.pin_trait(" ".join(args.name), " ".join(args.description))
+    print(f"Trait pinned: {' '.join(args.name)}")
+
+
+def cmd_self_traits(args):
+    ne = NarrativeEngine(db_path=args.db)
+    traits = ne.pinned_traits()
+    if not traits:
+        print("No pinned traits. Run: nexus self pin <name> --description <text>")
+        return
+    for t in traits:
+        print(f"  [{t.name}] {t.description}")
+
+
+def cmd_self_remove(args):
+    ne = NarrativeEngine(db_path=args.db)
+    if ne.remove_trait(args.name):
+        print(f"Removed trait: {args.name}")
+    else:
+        print(f"Trait not found: {args.name}")
+
+
+# ---------------------------------------------------------------------------
+# Contact / relationship commands
+# ---------------------------------------------------------------------------
+
+def cmd_contact_show(args):
+    rs = RelationshipStore(db_path=args.db)
+    print(rs.session_briefing(args.name))
+
+
+def cmd_contact_observe(args):
+    rs = RelationshipStore(db_path=args.db)
+    obs = rs.observe(
+        name=args.name,
+        observation=" ".join(args.observation),
+        category=args.category,
+        confidence=args.confidence,
+    )
+    print(f"Observation recorded [{obs.category}]: {obs.content}")
+
+
+def cmd_contact_list(args):
+    rs = RelationshipStore(db_path=args.db)
+    contacts = rs.all_contacts()
+    if not contacts:
+        print("No contacts. Use: nexus contact observe <name> <observation>")
+        return
+    for c in contacts:
+        last = f"{c.days_since_last:.0f}d ago" if c.days_since_last > 1 else "recently"
+        print(f"  {c.name} [{c.contact_type}] | {c.interaction_count} sessions | last seen {last} | {len(c.observations)} observations")
+
+
+def cmd_contact_log(args):
+    rs = RelationshipStore(db_path=args.db)
+    c = rs.log_interaction(args.name, notes=" ".join(args.notes) if args.notes else "")
+    print(f"Logged interaction with {c.name} (total: {c.interaction_count})")
+
+
+# ---------------------------------------------------------------------------
 # Parser assembly
 # ---------------------------------------------------------------------------
 
@@ -586,6 +663,45 @@ def build_parser() -> argparse.ArgumentParser:
     grow_p.add_argument("--json", action="store_true", help="Output as JSON")
 
     # ------------------------------------------------------------------
+    # self  (narrative / identity)
+    # ------------------------------------------------------------------
+    self_p = sub.add_parser("self", help="Agent self-model and identity narrative")
+    self_sub = self_p.add_subparsers(dest="self_cmd", required=False)
+    self_p.add_argument("--json", action="store_true", help="Output as JSON")
+
+    sp = self_sub.add_parser("pin", help="Pin a behavioral trait")
+    sp.add_argument("name", nargs="+", help="Short trait name")
+    sp.add_argument("--description", "-d", nargs="+", required=True,
+                    help="Description of the trait")
+
+    self_sub.add_parser("traits", help="List pinned traits")
+
+    sr = self_sub.add_parser("remove", help="Remove a pinned trait")
+    sr.add_argument("name", help="Trait name to remove")
+
+    # ------------------------------------------------------------------
+    # contact  (relationships)
+    # ------------------------------------------------------------------
+    con_p = sub.add_parser("contact", help="Relationship memory for contacts")
+    con_sub = con_p.add_subparsers(dest="con_cmd", required=True)
+
+    cs = con_sub.add_parser("show", help="Show briefing for a contact")
+    cs.add_argument("name")
+
+    co = con_sub.add_parser("observe", help="Record an observation about a contact")
+    co.add_argument("name", help="Contact name")
+    co.add_argument("observation", nargs="+", help="What you observed")
+    co.add_argument("--category", "-c", default="pattern",
+                    choices=list(OBSERVATION_CATEGORIES.keys()))
+    co.add_argument("--confidence", type=float, default=0.8)
+
+    con_sub.add_parser("list", help="List all known contacts")
+
+    cl = con_sub.add_parser("log", help="Log an interaction (increments session count)")
+    cl.add_argument("name")
+    cl.add_argument("notes", nargs="*", help="Optional interaction notes")
+
+    # ------------------------------------------------------------------
     # mcp
     # ------------------------------------------------------------------
     sub.add_parser(
@@ -663,6 +779,26 @@ def main():
 
     elif args.command == "growth":
         cmd_growth(args)
+
+    elif args.command == "self":
+        self_cmd = getattr(args, "self_cmd", None)
+        if self_cmd == "pin":
+            cmd_self_pin(args)
+        elif self_cmd == "traits":
+            cmd_self_traits(args)
+        elif self_cmd == "remove":
+            cmd_self_remove(args)
+        else:
+            cmd_self(args)
+
+    elif args.command == "contact":
+        dispatch = {
+            "show":    cmd_contact_show,
+            "observe": cmd_contact_observe,
+            "list":    cmd_contact_list,
+            "log":     cmd_contact_log,
+        }
+        dispatch[args.con_cmd](args)
 
     elif args.command == "mcp":
         try:

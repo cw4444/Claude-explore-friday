@@ -354,6 +354,86 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                     },
                 },
             ),
+            types.Tool(
+                name="nexus_self",
+                description=(
+                    "Return a synthesized self-model: strengths, failure patterns, behavioral traits, "
+                    "knowledge depth, and trajectory. Call at session start for identity continuity. "
+                    "This is who you are, derived from your accumulated history."
+                ),
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            types.Tool(
+                name="nexus_pin_trait",
+                description=(
+                    "Pin a behavioral trait to your self-model that isn't derivable from data. "
+                    "Use for things you or a human has explicitly noticed about how you work."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name":        {"type": "string", "description": "Short trait name"},
+                        "description": {"type": "string", "description": "What this trait means operationally"},
+                    },
+                    "required": ["name", "description"],
+                },
+            ),
+            types.Tool(
+                name="nexus_contact_show",
+                description=(
+                    "Return a structured briefing for working with a specific person or agent. "
+                    "Includes their preferences, trust boundaries, current context, and relationship history. "
+                    "Call at session start when you know who you'll be working with."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Contact name"},
+                    },
+                    "required": ["name"],
+                },
+            ),
+            types.Tool(
+                name="nexus_contact_observe",
+                description=(
+                    "Record an observation about a contact. This is how the relationship grows. "
+                    "Call this whenever you learn something about how someone works, what they value, "
+                    "what they trust you with, or what their current situation is. "
+                    "Categories: preference, pattern, trust, context, history, warning."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name":        {"type": "string"},
+                        "observation": {"type": "string"},
+                        "category":    {"type": "string",
+                                        "enum": ["preference","pattern","trust","context","history","warning"],
+                                        "default": "pattern"},
+                        "confidence":  {"type": "number", "minimum": 0, "maximum": 1, "default": 0.8},
+                    },
+                    "required": ["name", "observation"],
+                },
+            ),
+            types.Tool(
+                name="nexus_contact_log",
+                description=(
+                    "Log that a session with this contact has ended. Increments interaction count "
+                    "and updates last_seen. Call at the end of every session with a known contact."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "name":  {"type": "string"},
+                        "notes": {"type": "string", "description": "Brief notes on what happened"},
+                    },
+                    "required": ["name"],
+                },
+            ),
+            types.Tool(
+                name="nexus_contact_list",
+                description="List all known contacts with interaction counts and recency.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -567,6 +647,57 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                         f"Type:     {identity.agent_type} ({AGENT_TYPES.get(identity.agent_type, 'custom')})\n"
                         f"Sessions: {identity.session_count}"
                     )
+
+            elif name == "nexus_self":
+                from .narrative import NarrativeEngine
+                ne = NarrativeEngine(db_path=db_path)
+                model = ne.generate()
+                return text(model.briefing())
+
+            elif name == "nexus_pin_trait":
+                from .narrative import NarrativeEngine
+                ne = NarrativeEngine(db_path=db_path)
+                ne.pin_trait(arguments["name"], arguments["description"])
+                return text(f"Trait pinned: {arguments['name']}")
+
+            elif name == "nexus_contact_show":
+                from .relationships import RelationshipStore
+                rs = RelationshipStore(db_path=db_path)
+                return text(rs.session_briefing(arguments["name"]))
+
+            elif name == "nexus_contact_observe":
+                from .relationships import RelationshipStore
+                rs = RelationshipStore(db_path=db_path)
+                obs = rs.observe(
+                    name=arguments["name"],
+                    observation=arguments["observation"],
+                    category=arguments.get("category", "pattern"),
+                    confidence=arguments.get("confidence", 0.8),
+                )
+                return text(f"Observation recorded [{obs.category}]: {obs.content}")
+
+            elif name == "nexus_contact_log":
+                from .relationships import RelationshipStore
+                rs = RelationshipStore(db_path=db_path)
+                c = rs.log_interaction(arguments["name"],
+                                       notes=arguments.get("notes", ""))
+                return text(f"Logged interaction with {c.name} (total sessions: {c.interaction_count})")
+
+            elif name == "nexus_contact_list":
+                from .relationships import RelationshipStore
+                rs = RelationshipStore(db_path=db_path)
+                contacts = rs.all_contacts()
+                if not contacts:
+                    return text("No contacts yet. Use nexus_contact_observe to start building relationship memory.")
+                lines = [f"Known contacts ({len(contacts)}):"]
+                for c in contacts:
+                    last = (f"{c.days_since_last:.0f}d ago"
+                            if c.days_since_last > 1 else "recently")
+                    lines.append(
+                        f"  {c.name} [{c.contact_type}] | {c.interaction_count} sessions | "
+                        f"last seen {last} | {len(c.observations)} observations"
+                    )
+                return text("\n".join(lines))
 
             else:
                 return text(f"Unknown tool: {name}")

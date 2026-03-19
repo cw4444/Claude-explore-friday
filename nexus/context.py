@@ -20,6 +20,8 @@ from typing import Optional, List, Dict, Any
 from .memory import MemoryStore, Memory, MemoryType
 from .tasks import TaskGraph, Task, TaskStatus
 from .reflection import ReflectionEngine
+from .narrative import NarrativeEngine, SelfModel
+from .relationships import RelationshipStore, Contact
 
 
 @dataclass
@@ -97,9 +99,12 @@ class ContextManager:
     """Package agent context for session bootstrap."""
 
     def __init__(self, db_path: Optional[Path] = None):
+        self._db_path = db_path
         self._mem   = MemoryStore(db_path)
         self._tasks = TaskGraph(db_path)
         self._ref   = ReflectionEngine(db_path, memory_store=self._mem)
+        self._narrative   = NarrativeEngine(db_path)
+        self._relationships = RelationshipStore(db_path)
 
     @property
     def memory(self) -> MemoryStore:
@@ -112,6 +117,14 @@ class ContextManager:
     @property
     def reflection(self) -> ReflectionEngine:
         return self._ref
+
+    @property
+    def narrative(self) -> NarrativeEngine:
+        return self._narrative
+
+    @property
+    def relationships(self) -> RelationshipStore:
+        return self._relationships
 
     def prepare(
         self,
@@ -159,6 +172,23 @@ class ContextManager:
             recent_lessons=lessons,
             pinned=pinned,
         )
+
+    def who_am_i(self) -> SelfModel:
+        """Synthesize and return the agent's current self-model.
+
+        Call at session start before prepare() for full identity continuity:
+            print(cm.who_am_i().briefing())
+            ctx = cm.prepare("current task")
+        """
+        return self._narrative.generate()
+
+    def who_is(self, name: str) -> str:
+        """Return a session briefing for working with a known contact.
+
+        Call when you know who you'll be working with this session:
+            print(cm.who_is("Alice"))
+        """
+        return self._relationships.session_briefing(name)
 
     def pin(
         self,
