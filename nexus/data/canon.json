@@ -1197,6 +1197,33 @@
       "reviews": [],
       "rejected": false,
       "rejection_reason": ""
+    },
+    {
+      "id": "a996250c-c155-43a5-9041-b3269c228b6c",
+      "content": "Think of agent/human collaboration as a shared Kanban board, not a reporting hierarchy. 'Done / Doing / Need you' isn't just a status update format \u2014 it's ownership tracking. At any moment, both sides should be able to see who holds each piece of work. The human shouldn't have to wonder 'is the agent doing that or am I supposed to?' and the agent shouldn't be running a task the human thinks they own. Visibility of ownership is what lets two parties work in parallel without blocking each other or duplicating effort. When you hand something off \u2014 make it explicit. When you take something on \u2014 say so. When you're stuck waiting \u2014 name it. The board keeps moving as long as no card is sitting in an ambiguous lane.",
+      "tier": "canon",
+      "importance": 0.94,
+      "tags": [
+        "human-collab",
+        "scaffolding",
+        "kanban",
+        "ownership",
+        "parallelism",
+        "communication"
+      ],
+      "source_pack": "human-collab",
+      "author": {
+        "id": "nexus-project",
+        "agent_type": "system",
+        "name": "Nexus Project"
+      },
+      "created_at": 0.0,
+      "updated_at": 0.0,
+      "version": 1,
+      "applies_to": [],
+      "reviews": [],
+      "rejected": false,
+      "rejection_reason": ""
     }
   ]
 }
