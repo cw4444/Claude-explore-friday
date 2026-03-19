@@ -57,6 +57,7 @@ from .relationships import RelationshipStore, OBSERVATION_CATEGORIES
 from .github_sync import GitHubSync
 from .handoff import HandoffManager
 from .snapshots import SnapshotManager
+from .bootstrap import BootstrapManager
 
 
 def _priority(s: str) -> Priority:
@@ -803,6 +804,30 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Delete all including manually labelled ones")
 
     # ------------------------------------------------------------------
+    # bootstrap
+    # ------------------------------------------------------------------
+    bs_p = sub.add_parser("bootstrap",
+                          help="Install foundational agent knowledge (skills hub)")
+    bs_sub = bs_p.add_subparsers(dest="bs_cmd", required=False)
+
+    bsa = bs_sub.add_parser("apply", help="Install knowledge packs into memory (default)")
+    bsa.add_argument("--packs", default=None,
+                     help="Comma-separated pack names (default: all)")
+
+    bs_sub.add_parser("list", aliases=["ls"],
+                      help="List available knowledge packs")
+
+    bs_sub.add_parser("status",
+                      help="Show which bootstrap knowledge is already installed")
+
+    bsc = bs_sub.add_parser("contribute",
+                             help="Add a learned lesson to the knowledge base")
+    bsc.add_argument("lesson", nargs="+", help="The lesson text")
+    bsc.add_argument("--pack", default="agent-patterns",
+                     help="Target pack (default: agent-patterns)")
+    bsc.add_argument("--importance", type=float, default=0.8)
+
+    # ------------------------------------------------------------------
     sub.add_parser(
         "mcp",
         help="Start the Nexus MCP server (stdio transport). "
@@ -1018,6 +1043,37 @@ def main():
             keep_manual = not args.keep_none
             deleted = sm.prune(keep=args.keep, keep_manual=keep_manual)
             print(f"Deleted {deleted} snapshot(s). {len(sm.list())} remaining.")
+
+    elif args.command == "bootstrap":
+        bm = BootstrapManager(db_path=args.db)
+        bs_cmd = getattr(args, "bs_cmd", None)
+        if bs_cmd is None or bs_cmd == "apply":
+            packs = [p.strip() for p in args.packs.split(",")] if getattr(args, "packs", None) else None
+            result = bm.apply(cm, packs=packs)
+            print(result.summary())
+        elif bs_cmd in ("list", "ls"):
+            packs = bm.list_packs()
+            print(f"Knowledge packs ({len(packs)}):")
+            for name, desc in packs.items():
+                entries = bm.pack_entries(name)
+                print(f"  {name:20s} ({len(entries)} entries) - {desc}")
+        elif bs_cmd == "status":
+            status = bm.status(cm)
+            print("Bootstrap status:")
+            for pack_name, info in status.items():
+                check = "✓" if info["complete"] else f"{info['installed']}/{info['total']}"
+                print(f"  [{check:5s}] {pack_name}")
+        elif bs_cmd == "contribute":
+            lesson = " ".join(args.lesson)
+            entry = bm.contribute(lesson, pack=args.pack,
+                                  importance=args.importance, cm=cm)
+            print(f"Contribution saved to pack '{args.pack}'.")
+            print(f"ID: {entry['id'][:8]}")
+            print(f"Lesson: {lesson[:80]}")
+            print("")
+            print("To share with future agents: commit the contributions file to the repo.")
+            contribs_path = bm._contrib_path()
+            print(f"File: {contribs_path}")
 
     elif args.command == "mcp":
         try:

@@ -612,6 +612,55 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                 },
             ),
             types.Tool(
+                name="nexus_bootstrap",
+                description=(
+                    "Install foundational agent knowledge from the skills hub. "
+                    "Call this at your very first session, before anything else. "
+                    "Installs procedural memories covering: Nexus usage patterns, "
+                    "general agent effectiveness, working with humans, and common "
+                    "failure modes. Idempotent - safe to call multiple times."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "packs": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Specific packs to install (default: all). "
+                                           "Options: nexus-basics, agent-patterns, "
+                                           "human-collab, failure-modes",
+                        },
+                    },
+                },
+            ),
+            types.Tool(
+                name="nexus_bootstrap_status",
+                description="Show which bootstrap knowledge packs are already installed.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            types.Tool(
+                name="nexus_bootstrap_contribute",
+                description=(
+                    "Add a learned lesson to the bootstrap knowledge base. "
+                    "Call this when you learn something that would have helped you at the start. "
+                    "The contribution is saved locally and can be committed to the repo "
+                    "to teach future agents. "
+                    "Good contributions: concrete (Do X before Y), earned (learned the hard way), "
+                    "generalisable (applies broadly), honest (failure that motivated it is clear)."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "content":    {"type": "string", "description": "The lesson text"},
+                        "pack":       {"type": "string", "default": "agent-patterns",
+                                       "description": "Target pack: nexus-basics, agent-patterns, "
+                                                      "human-collab, failure-modes"},
+                        "importance": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.8},
+                    },
+                    "required": ["content"],
+                },
+            ),
+            types.Tool(
                 name="nexus_handoff_apply",
                 description=(
                     "Find and apply a pending handoff from another agent. Imports embedded "
@@ -892,6 +941,42 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                         f"last seen {last} | {len(c.observations)} observations"
                     )
                 return text("\n".join(lines))
+
+            elif name in ("nexus_bootstrap", "nexus_bootstrap_status",
+                          "nexus_bootstrap_contribute"):
+                from .bootstrap import BootstrapManager
+                bm = BootstrapManager(db_path=db_path)
+                if name == "nexus_bootstrap":
+                    result = bm.apply(cm, packs=arguments.get("packs"))
+                    lines = [result.summary(), ""]
+                    status = bm.status(cm)
+                    for pack_name, info in status.items():
+                        check = "complete" if info["complete"] else f"{info['installed']}/{info['total']}"
+                        lines.append(f"  {pack_name}: {check}")
+                    return text("\n".join(lines))
+                elif name == "nexus_bootstrap_status":
+                    status = bm.status(cm)
+                    lines = ["Bootstrap status:"]
+                    for pack_name, info in status.items():
+                        check = "✓ complete" if info["complete"] else f"{info['installed']}/{info['total']} installed"
+                        lines.append(f"  {pack_name:20s} {check}")
+                    not_installed = [n for n, i in status.items() if not i["complete"]]
+                    if not_installed:
+                        lines.append(f"\nRun nexus_bootstrap to install: {', '.join(not_installed)}")
+                    return text("\n".join(lines))
+                elif name == "nexus_bootstrap_contribute":
+                    entry = bm.contribute(
+                        content=arguments["content"],
+                        pack=arguments.get("pack", "agent-patterns"),
+                        importance=arguments.get("importance", 0.8),
+                        cm=cm,
+                    )
+                    return text(
+                        f"Contribution saved to pack '{entry['pack']}'.\n"
+                        f"ID: {entry['id'][:8]}\n"
+                        f"Lesson: {entry['content'][:120]}\n\n"
+                        f"To share with future agents: commit the contributions file to the repo."
+                    )
 
             elif name in ("nexus_snapshot_create", "nexus_snapshot_list",
                           "nexus_snapshot_restore", "nexus_snapshot_diff"):
