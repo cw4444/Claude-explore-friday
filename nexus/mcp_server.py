@@ -434,6 +434,140 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                 description="List all known contacts with interaction counts and recency.",
                 inputSchema={"type": "object", "properties": {}},
             ),
+            types.Tool(
+                name="nexus_github_pull_issues",
+                description=(
+                    "Pull open GitHub issues into the Nexus task graph. Each issue becomes "
+                    "a persistent task. Already-synced issues are updated, not duplicated. "
+                    "Priority labels (priority:high, urgent, etc.) map to task priority."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo":   {"type": "string", "description": "GitHub repo: owner/repo"},
+                        "token":  {"type": "string", "description": "GitHub personal access token"},
+                        "state":  {"type": "string", "enum": ["open", "closed", "all"], "default": "open"},
+                        "labels": {"type": "array", "items": {"type": "string"},
+                                   "description": "Filter by labels (optional)"},
+                        "limit":  {"type": "integer", "default": 100},
+                    },
+                    "required": ["repo", "token"],
+                },
+            ),
+            types.Tool(
+                name="nexus_github_sync_context",
+                description=(
+                    "Store repo metadata (description, language, topics, recent PRs) as "
+                    "semantic memories. Run once at the start of a session to give the agent "
+                    "context about the repo it's working in."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo":  {"type": "string", "description": "GitHub repo: owner/repo"},
+                        "token": {"type": "string", "description": "GitHub personal access token"},
+                    },
+                    "required": ["repo", "token"],
+                },
+            ),
+            types.Tool(
+                name="nexus_github_comment",
+                description=(
+                    "Post a comment to a GitHub issue as the agent. Use to report progress, "
+                    "findings, or request clarification directly on the issue."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo":         {"type": "string"},
+                        "token":        {"type": "string"},
+                        "issue_number": {"type": "integer"},
+                        "body":         {"type": "string"},
+                    },
+                    "required": ["repo", "token", "issue_number", "body"],
+                },
+            ),
+            types.Tool(
+                name="nexus_github_close_issue",
+                description="Close a GitHub issue, optionally posting a final comment.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo":         {"type": "string"},
+                        "token":        {"type": "string"},
+                        "issue_number": {"type": "integer"},
+                        "comment":      {"type": "string", "description": "Final comment (optional)"},
+                    },
+                    "required": ["repo", "token", "issue_number"],
+                },
+            ),
+            types.Tool(
+                name="nexus_github_create_issue",
+                description=(
+                    "Create a new GitHub issue. Agents that discover bugs or scope gaps "
+                    "during work should file them immediately rather than leaving notes."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "repo":     {"type": "string"},
+                        "token":    {"type": "string"},
+                        "title":    {"type": "string"},
+                        "body":     {"type": "string", "default": ""},
+                        "labels":   {"type": "array", "items": {"type": "string"}, "default": []},
+                        "assignees": {"type": "array", "items": {"type": "string"}, "default": []},
+                    },
+                    "required": ["repo", "token", "title"],
+                },
+            ),
+            types.Tool(
+                name="nexus_handoff_create",
+                description=(
+                    "Package current work state for handoff to the next agent. Writes a "
+                    "structured JSON file that another agent can load to start warm. Include "
+                    "everything the next agent needs: what was done, what's next, blockers, "
+                    "key facts, and warnings. Embed a knowledge bundle for full context transfer."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "summary":      {"type": "string", "description": "What was accomplished"},
+                        "to_agent":     {"type": "string", "default": "any",
+                                         "description": "Target agent type or 'any'"},
+                        "next_steps":   {"type": "array", "items": {"type": "string"},
+                                         "description": "Prioritized list of what to do next"},
+                        "work_done":    {"type": "array", "items": {"type": "string"}},
+                        "blockers":     {"type": "array", "items": {"type": "string"}},
+                        "key_facts":    {"type": "array", "items": {"type": "string"},
+                                         "description": "Facts the next agent must know"},
+                        "warnings":     {"type": "array", "items": {"type": "string"}},
+                        "directory":    {"type": "string", "default": "handoffs",
+                                         "description": "Directory to write the handoff file"},
+                        "include_bundle": {"type": "boolean", "default": True,
+                                           "description": "Embed knowledge bundle in handoff"},
+                        "bundle_tags":  {"type": "array", "items": {"type": "string"},
+                                         "description": "Filter bundle to these tags (optional)"},
+                    },
+                    "required": ["summary"],
+                },
+            ),
+            types.Tool(
+                name="nexus_handoff_apply",
+                description=(
+                    "Find and apply a pending handoff from another agent. Imports embedded "
+                    "memories, creates tasks from next_steps, stores key facts. Marks the "
+                    "handoff as acknowledged so it won't be applied again. Call at session "
+                    "start to receive context from a previous agent."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "directory":  {"type": "string", "default": "handoffs"},
+                        "agent_type": {"type": "string",
+                                       "description": "Prefer handoffs addressed to this type (optional)"},
+                    },
+                },
+            ),
         ]
 
     # ------------------------------------------------------------------
@@ -698,6 +832,74 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                         f"last seen {last} | {len(c.observations)} observations"
                     )
                 return text("\n".join(lines))
+
+            elif name in ("nexus_github_pull_issues", "nexus_github_sync_context",
+                          "nexus_github_comment", "nexus_github_close_issue",
+                          "nexus_github_create_issue"):
+                from .github_sync import GitHubSync
+                gh = GitHubSync(arguments["repo"], arguments["token"], db_path=db_path)
+                if name == "nexus_github_pull_issues":
+                    result = gh.pull_issues(
+                        cm,
+                        state=arguments.get("state", "open"),
+                        labels=arguments.get("labels"),
+                        limit=arguments.get("limit", 100),
+                    )
+                    return text(result.summary())
+                elif name == "nexus_github_sync_context":
+                    result = gh.sync_repo_context(cm)
+                    return text(result.summary())
+                elif name == "nexus_github_comment":
+                    gh.comment_issue(arguments["issue_number"], arguments["body"])
+                    return text(f"Comment posted to #{arguments['issue_number']}")
+                elif name == "nexus_github_close_issue":
+                    gh.close_issue(arguments["issue_number"],
+                                   comment=arguments.get("comment"))
+                    return text(f"Issue #{arguments['issue_number']} closed")
+                elif name == "nexus_github_create_issue":
+                    resp = gh.create_issue(
+                        title=arguments["title"],
+                        body=arguments.get("body", ""),
+                        labels=arguments.get("labels", []),
+                        assignees=arguments.get("assignees", []),
+                    )
+                    return text(f"Issue created: #{resp.get('number')} {resp.get('html_url','')}")
+
+            elif name in ("nexus_handoff_create", "nexus_handoff_apply"):
+                from .handoff import HandoffManager
+                hm = HandoffManager(db_path=db_path)
+                if name == "nexus_handoff_create":
+                    directory = Path(arguments.get("directory", "handoffs"))
+                    h = hm.create(
+                        summary=arguments["summary"],
+                        to_agent=arguments.get("to_agent", "any"),
+                        next_steps=arguments.get("next_steps", []),
+                        work_done=arguments.get("work_done", []),
+                        blockers=arguments.get("blockers", []),
+                        key_facts=arguments.get("key_facts", []),
+                        warnings=arguments.get("warnings", []),
+                        include_bundle=arguments.get("include_bundle", True),
+                        bundle_tags=arguments.get("bundle_tags"),
+                    )
+                    path = hm.write(h, directory)
+                    return text(
+                        f"Handoff written to {path}\n"
+                        f"ID: {h.id}\n"
+                        f"To: {h.to_agent}\n"
+                        f"Next steps: {len(h.next_steps)}\n\n"
+                        f"{h.briefing()}"
+                    )
+                elif name == "nexus_handoff_apply":
+                    directory = Path(arguments.get("directory", "handoffs"))
+                    result = hm.find_and_apply(
+                        directory,
+                        agent_type=arguments.get("agent_type"),
+                        cm=cm,
+                    )
+                    if result:
+                        return text(result.briefing())
+                    else:
+                        return text(f"No pending handoffs found in {directory}")
 
             else:
                 return text(f"Unknown tool: {name}")

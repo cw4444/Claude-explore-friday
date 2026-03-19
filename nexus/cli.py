@@ -54,6 +54,8 @@ from .bundle import BundleExporter, BundleImporter, KnowledgeBundle
 from .growth import GrowthTracker
 from .narrative import NarrativeEngine
 from .relationships import RelationshipStore, OBSERVATION_CATEGORIES
+from .github_sync import GitHubSync
+from .handoff import HandoffManager
 
 
 def _priority(s: str) -> Priority:
@@ -702,6 +704,77 @@ def build_parser() -> argparse.ArgumentParser:
     cl.add_argument("notes", nargs="*", help="Optional interaction notes")
 
     # ------------------------------------------------------------------
+    # github
+    # ------------------------------------------------------------------
+    gh_p = sub.add_parser("github", help="GitHub ↔ Nexus sync and interaction")
+    gh_p.add_argument("--repo", "-r", required=True,
+                      help="GitHub repo: owner/repo")
+    gh_p.add_argument("--token", "-t", default=None,
+                      help="GitHub token (default: GITHUB_TOKEN env var)")
+    gh_sub = gh_p.add_subparsers(dest="gh_cmd", required=True)
+
+    gi = gh_sub.add_parser("issues", help="Pull open issues into Nexus tasks")
+    gi.add_argument("--state", default="open", choices=["open", "closed", "all"])
+    gi.add_argument("--labels", default=None, help="Filter by comma-separated labels")
+    gi.add_argument("--limit", "-n", type=int, default=100)
+
+    gh_sub.add_parser("context", help="Sync repo metadata and recent PRs as memories")
+
+    gpr = gh_sub.add_parser("pr", help="Pull a PR's file context into memory")
+    gpr.add_argument("number", type=int)
+
+    gci = gh_sub.add_parser("comment", help="Post a comment to an issue")
+    gci.add_argument("issue", type=int)
+    gci.add_argument("body", nargs="+")
+
+    gcc = gh_sub.add_parser("close", help="Close a GitHub issue")
+    gcc.add_argument("issue", type=int)
+    gcc.add_argument("--comment", default=None, help="Final comment before closing")
+
+    # ------------------------------------------------------------------
+    # webhook
+    # ------------------------------------------------------------------
+    wh_p = sub.add_parser("webhook", help="Webhook receiver (GitHub/CI events → Nexus)")
+    wh_p.add_argument("--repo", "-r", required=True, help="GitHub repo: owner/repo")
+    wh_p.add_argument("--token", "-t", default=None, help="GitHub token")
+    wh_p.add_argument("--secret", "-s", default=None,
+                      help="Webhook secret for HMAC verification (default: NEXUS_WEBHOOK_SECRET env var)")
+    wh_sub = wh_p.add_subparsers(dest="wh_cmd", required=True)
+
+    ws = wh_sub.add_parser("serve", help="Start the webhook HTTP server")
+    ws.add_argument("--host", default="0.0.0.0")
+    ws.add_argument("--port", "-p", type=int, default=8765)
+
+    # ------------------------------------------------------------------
+    # handoff
+    # ------------------------------------------------------------------
+    ho_p = sub.add_parser("handoff", help="Agent-to-agent handoff protocol")
+    ho_sub = ho_p.add_subparsers(dest="ho_cmd", required=True)
+
+    hoc = ho_sub.add_parser("create", help="Create a handoff package for the next agent")
+    hoc.add_argument("summary", nargs="+", help="What was accomplished")
+    hoc.add_argument("--to", default="any", dest="to_agent",
+                     help="Target agent type (default: any)")
+    hoc.add_argument("--steps", nargs="+", default=[],
+                     help="Next steps for the receiving agent")
+    hoc.add_argument("--blockers", nargs="+", default=[])
+    hoc.add_argument("--facts", nargs="+", default=[],
+                     help="Key facts the next agent must know")
+    hoc.add_argument("--warnings", nargs="+", default=[])
+    hoc.add_argument("--dir", default="handoffs", dest="handoff_dir",
+                     help="Directory to write the handoff to (default: handoffs/)")
+    hoc.add_argument("--no-bundle", action="store_true",
+                     help="Don't embed a knowledge bundle")
+
+    hoa = ho_sub.add_parser("apply", help="Find and apply incoming handoffs")
+    hoa.add_argument("--dir", default="handoffs", dest="handoff_dir")
+    hoa.add_argument("--type", default=None, dest="agent_type",
+                     help="Prefer handoffs addressed to this agent type")
+
+    hol = ho_sub.add_parser("list", help="List handoff files in a directory")
+    hol.add_argument("--dir", default="handoffs", dest="handoff_dir")
+
+    # ------------------------------------------------------------------
     # mcp
     # ------------------------------------------------------------------
     sub.add_parser(
@@ -799,6 +872,91 @@ def main():
             "log":     cmd_contact_log,
         }
         dispatch[args.con_cmd](args)
+
+    elif args.command == "github":
+        import os
+        token = args.token or os.environ.get("GITHUB_TOKEN")
+        if not token:
+            print("GitHub token required: --token or GITHUB_TOKEN env var")
+            sys.exit(1)
+        gh = GitHubSync(args.repo, token, db_path=args.db)
+        if args.gh_cmd == "issues":
+            labels = [l.strip() for l in args.labels.split(",")] if args.labels else None
+            result = gh.pull_issues(cm, state=args.state, labels=labels, limit=args.limit)
+            print(result.summary())
+        elif args.gh_cmd == "context":
+            result = gh.sync_repo_context(cm)
+            print(result.summary())
+        elif args.gh_cmd == "pr":
+            result = gh.pull_pr_context(cm, args.number)
+            print(result.summary())
+        elif args.gh_cmd == "comment":
+            body = " ".join(args.body)
+            resp = gh.comment_issue(args.issue, body)
+            print(f"Posted comment to #{args.issue}: {resp.get('html_url', 'done')}")
+        elif args.gh_cmd == "close":
+            gh.close_issue(args.issue, comment=args.comment)
+            print(f"Closed issue #{args.issue}")
+
+    elif args.command == "webhook":
+        import os
+        token = args.token or os.environ.get("GITHUB_TOKEN")
+        if not token:
+            print("GitHub token required: --token or GITHUB_TOKEN env var")
+            sys.exit(1)
+        from .webhooks import WebhookServer
+        ws = WebhookServer(args.repo, token, db_path=args.db, secret=args.secret)
+        if args.wh_cmd == "serve":
+            print(f"Starting webhook server on {args.host}:{args.port}")
+            print(f"  GitHub events: POST /webhook/github")
+            print(f"  Generic events: POST /webhook/generic")
+            print(f"  Health check: GET /health")
+            print(f"  Event log: GET /events")
+            ws.serve(host=args.host, port=args.port)
+
+    elif args.command == "handoff":
+        hm = HandoffManager(db_path=args.db)
+        if args.ho_cmd == "create":
+            handoff_dir = Path(args.handoff_dir)
+            h = hm.create(
+                summary=" ".join(args.summary),
+                to_agent=args.to_agent,
+                next_steps=args.steps,
+                blockers=args.blockers,
+                key_facts=args.facts,
+                warnings=args.warnings,
+                include_bundle=not args.no_bundle,
+            )
+            path = hm.write(h, handoff_dir)
+            print(f"Handoff written to: {path}")
+            print(f"ID: {h.id}")
+            print(f"To: {h.to_agent}")
+            if args.steps:
+                print(f"Steps: {len(args.steps)}")
+        elif args.ho_cmd == "apply":
+            handoff_dir = Path(args.handoff_dir)
+            result = hm.find_and_apply(handoff_dir, agent_type=args.agent_type, cm=cm)
+            if result:
+                print(result.briefing())
+            else:
+                print(f"No pending handoffs found in {handoff_dir}")
+        elif args.ho_cmd == "list":
+            handoff_dir = Path(args.handoff_dir)
+            if not handoff_dir.is_dir():
+                print(f"Directory not found: {handoff_dir}")
+            else:
+                files = list(handoff_dir.glob("nexus-handoff-*.json"))
+                if not files:
+                    print("No handoff files found.")
+                else:
+                    for fp in sorted(files):
+                        try:
+                            h = hm.load(fp)
+                            age = (time.time() - h.created_at) / 60
+                            print(f"  [{h.status}] {fp.name}  from:{h.from_agent} "
+                                  f"to:{h.to_agent}  {age:.0f}m ago")
+                        except Exception as e:
+                            print(f"  [error] {fp.name}: {e}")
 
     elif args.command == "mcp":
         try:
