@@ -36,6 +36,10 @@ Once connected, the agent has access to:
   nexus_export_bundle - Export knowledge bundle for cross-agent sharing
   nexus_import_bundle - Import a knowledge bundle from another agent
   nexus_identity      - Get/set agent identity
+  nexus_snapshot_create  - Create a state snapshot (time travel checkpoint)
+  nexus_snapshot_list    - List available snapshots
+  nexus_snapshot_restore - Restore state from a snapshot
+  nexus_snapshot_diff    - Show what changed since a snapshot
 """
 
 import asyncio
@@ -552,6 +556,62 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                 },
             ),
             types.Tool(
+                name="nexus_snapshot_create",
+                description=(
+                    "Create a snapshot of the current Nexus state. "
+                    "Call this before any operation that significantly modifies memory or tasks: "
+                    "importing a bundle, applying a handoff, pulling GitHub issues. "
+                    "Snapshots are the rollback point if something goes wrong."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string", "default": "",
+                                  "description": "Human-readable label for this checkpoint"},
+                    },
+                },
+            ),
+            types.Tool(
+                name="nexus_snapshot_list",
+                description="List available snapshots, newest first.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            types.Tool(
+                name="nexus_snapshot_restore",
+                description=(
+                    "Restore Nexus state from a snapshot. Replaces memories, tasks, and "
+                    "reflections with the snapshot's contents. Always creates a pre-restore "
+                    "backup first so the revert is itself reversible. "
+                    "Use when a session stored bad memories, a bad import ran, or a handoff "
+                    "injected wrong tasks."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "snapshot_id": {"type": "string",
+                                        "description": "Snapshot ID or 8-char prefix from nexus_snapshot_list"},
+                        "no_backup":   {"type": "boolean", "default": False,
+                                        "description": "Skip pre-restore backup (not recommended)"},
+                    },
+                    "required": ["snapshot_id"],
+                },
+            ),
+            types.Tool(
+                name="nexus_snapshot_diff",
+                description=(
+                    "Show what changed since a snapshot: memories added/removed, "
+                    "tasks added or changed status, reflections added. "
+                    "Use to understand what a session did before deciding whether to restore."
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "snapshot_id": {"type": "string"},
+                    },
+                    "required": ["snapshot_id"],
+                },
+            ),
+            types.Tool(
                 name="nexus_handoff_apply",
                 description=(
                     "Find and apply a pending handoff from another agent. Imports embedded "
@@ -832,6 +892,43 @@ def build_server(db_path: Optional[Path] = None) -> Server:
                         f"last seen {last} | {len(c.observations)} observations"
                     )
                 return text("\n".join(lines))
+
+            elif name in ("nexus_snapshot_create", "nexus_snapshot_list",
+                          "nexus_snapshot_restore", "nexus_snapshot_diff"):
+                from .snapshots import SnapshotManager
+                sm = SnapshotManager(db_path=db_path)
+                if name == "nexus_snapshot_create":
+                    snap = sm.create(label=arguments.get("label", ""))
+                    return text(
+                        f"Snapshot created: {snap.meta.id[:8]}\n"
+                        f"  Memories:    {snap.meta.memory_count}\n"
+                        f"  Tasks:       {snap.meta.task_count}\n"
+                        f"  Reflections: {snap.meta.reflection_count}\n"
+                        f"  Label: {snap.meta.label or '(none)'}\n"
+                        f"  ID: {snap.meta.id}"
+                    )
+                elif name == "nexus_snapshot_list":
+                    metas = sm.list()
+                    if not metas:
+                        return text("No snapshots. Create one with nexus_snapshot_create.")
+                    lines = [f"Snapshots ({len(metas)}):"]
+                    for m in metas:
+                        lines.append(f"  {m.display()}")
+                    return text("\n".join(lines))
+                elif name == "nexus_snapshot_restore":
+                    backup = not arguments.get("no_backup", False)
+                    snap = sm.restore(arguments["snapshot_id"],
+                                      create_pre_restore_snapshot=backup)
+                    return text(
+                        f"Restored to: {snap.meta.label or snap.meta.id[:8]}\n"
+                        f"  Memories:    {snap.meta.memory_count}\n"
+                        f"  Tasks:       {snap.meta.task_count}\n"
+                        f"  Reflections: {snap.meta.reflection_count}\n"
+                        + ("Pre-restore backup created." if backup else "")
+                    )
+                elif name == "nexus_snapshot_diff":
+                    diff = sm.diff(arguments["snapshot_id"])
+                    return text(diff.summary())
 
             elif name in ("nexus_github_pull_issues", "nexus_github_sync_context",
                           "nexus_github_comment", "nexus_github_close_issue",

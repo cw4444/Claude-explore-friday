@@ -382,6 +382,14 @@ class HandoffManager:
         if cm is None:
             cm = ContextManager(self._db_path)
 
+        # Auto-snapshot before applying - allows rollback if handoff turns out to be bad
+        try:
+            from .snapshots import SnapshotManager
+            sm = SnapshotManager(db_path=self._db_path)
+            sm.create(label=f"pre-handoff (from {handoff.from_agent})", trigger="pre-handoff")
+        except Exception:
+            pass  # Snapshot failure must never block the handoff
+
         count = 0
 
         # Import embedded knowledge bundle

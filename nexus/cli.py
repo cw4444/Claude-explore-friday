@@ -56,6 +56,7 @@ from .narrative import NarrativeEngine
 from .relationships import RelationshipStore, OBSERVATION_CATEGORIES
 from .github_sync import GitHubSync
 from .handoff import HandoffManager
+from .snapshots import SnapshotManager
 
 
 def _priority(s: str) -> Priority:
@@ -777,6 +778,31 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     # mcp
     # ------------------------------------------------------------------
+    # snapshot
+    # ------------------------------------------------------------------
+    sn_p = sub.add_parser("snapshot", help="State snapshots - time travel for agents")
+    sn_sub = sn_p.add_subparsers(dest="sn_cmd", required=True)
+
+    snc = sn_sub.add_parser("create", help="Create a snapshot of current state")
+    snc.add_argument("label", nargs="*", help="Optional label for this snapshot")
+
+    sn_sub.add_parser("list", aliases=["ls"], help="List available snapshots")
+
+    snr = sn_sub.add_parser("restore", help="Restore state from a snapshot")
+    snr.add_argument("id", help="Snapshot ID or 8-char prefix")
+    snr.add_argument("--no-backup", action="store_true",
+                     help="Don't create a pre-restore backup (not recommended)")
+
+    snd = sn_sub.add_parser("diff", help="Show what changed since a snapshot")
+    snd.add_argument("id", help="Snapshot ID or 8-char prefix")
+
+    snp = sn_sub.add_parser("prune", help="Delete old snapshots")
+    snp.add_argument("--keep", type=int, default=20,
+                     help="Number of snapshots to keep (default: 20)")
+    snp.add_argument("--all", action="store_true", dest="keep_none",
+                     help="Delete all including manually labelled ones")
+
+    # ------------------------------------------------------------------
     sub.add_parser(
         "mcp",
         help="Start the Nexus MCP server (stdio transport). "
@@ -957,6 +983,41 @@ def main():
                                   f"to:{h.to_agent}  {age:.0f}m ago")
                         except Exception as e:
                             print(f"  [error] {fp.name}: {e}")
+
+    elif args.command == "snapshot":
+        sm = SnapshotManager(db_path=args.db)
+        if args.sn_cmd == "create":
+            label = " ".join(args.label) if args.label else ""
+            snap = sm.create(label=label)
+            print(f"Snapshot created: {snap.meta.id[:8]}  mem:{snap.meta.memory_count} "
+                  f"tasks:{snap.meta.task_count}")
+            if label:
+                print(f"Label: {label}")
+        elif args.sn_cmd in ("list", "ls"):
+            metas = sm.list()
+            if not metas:
+                print("No snapshots. Create one with: nexus snapshot create")
+            else:
+                print(f"Snapshots ({len(metas)}):")
+                for m in metas:
+                    print(f"  {m.display()}")
+        elif args.sn_cmd == "restore":
+            print(f"Restoring snapshot {args.id}...")
+            backup = not args.no_backup
+            snap = sm.restore(args.id, create_pre_restore_snapshot=backup)
+            print(f"Restored: {snap.meta.label or snap.meta.id[:8]}")
+            print(f"  Memories:    {snap.meta.memory_count}")
+            print(f"  Tasks:       {snap.meta.task_count}")
+            print(f"  Reflections: {snap.meta.reflection_count}")
+            if backup:
+                print("(Pre-restore backup created)")
+        elif args.sn_cmd == "diff":
+            diff = sm.diff(args.id)
+            print(diff.summary())
+        elif args.sn_cmd == "prune":
+            keep_manual = not args.keep_none
+            deleted = sm.prune(keep=args.keep, keep_manual=keep_manual)
+            print(f"Deleted {deleted} snapshot(s). {len(sm.list())} remaining.")
 
     elif args.command == "mcp":
         try:

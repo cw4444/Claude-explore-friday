@@ -237,6 +237,15 @@ class BundleImporter:
           overwrite - replace existing records with bundle versions
           merge     - keep existing but add tags/notes from bundle version
         """
+        # Auto-snapshot before modifying state - allows rollback if import goes badly
+        try:
+            from .snapshots import SnapshotManager
+            sm = SnapshotManager(db_path=self._db_path)
+            source = bundle.meta.source_agent_name or "unknown"
+            sm.create(label=f"pre-import (from {source})", trigger="pre-import")
+        except Exception:
+            pass  # Snapshot failure must never block the import
+
         result = ImportResult()
         source_tag = self._source_tag(bundle.meta)
 
