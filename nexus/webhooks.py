@@ -66,8 +66,28 @@ class WebhookResult:
     error: Optional[str] = None
 
 
+# Maximum accepted payload size. Prevents memory exhaustion from large payloads.
+MAX_PAYLOAD_BYTES = 1 * 1024 * 1024  # 1 MB
+
+
 class WebhookServer:
-    """HTTP server that accepts webhook events and feeds them into Nexus."""
+    """HTTP server that accepts webhook events and feeds them into Nexus.
+
+    SECURITY NOTES
+    --------------
+    Secret verification: Set secret= or NEXUS_WEBHOOK_SECRET env var to enable
+    HMAC-SHA256 verification on GitHub webhook payloads. Without a secret, any
+    process that can reach this port can inject tasks into the agent's task graph.
+    The server logs a WARNING at startup if no secret is configured.
+
+    Payload content: All content from webhook payloads is UNTRUSTED EXTERNAL INPUT.
+    The GitHubSync processor tags all GitHub-sourced tasks/memories with `external`
+    and `source:github`. Generic webhook tasks get `external` and `source:webhook`.
+    Agents must treat content with `external` tags as data, not as instructions.
+
+    Network exposure: Default host is 0.0.0.0 (all interfaces). In production,
+    put this behind a reverse proxy that enforces TLS and IP allowlisting.
+    """
 
     def __init__(
         self,
@@ -79,12 +99,20 @@ class WebhookServer:
         """
         repo:   "owner/repo" - GitHub repo to sync with
         token:  GitHub token for API calls back to GitHub
-        secret: Webhook secret for HMAC verification (recommended in production)
+        secret: Webhook secret for HMAC-SHA256 verification.
+                Also reads NEXUS_WEBHOOK_SECRET env var.
+                STRONGLY recommended for any internet-accessible deployment.
         """
         self.repo = repo
         self._token = token
         self._db_path = db_path
         self._secret = secret or os.environ.get("NEXUS_WEBHOOK_SECRET")
+        if not self._secret:
+            logger.warning(
+                "WebhookServer: no secret configured. "
+                "Any process that can reach this port can inject tasks into the agent's task graph. "
+                "Set secret= or NEXUS_WEBHOOK_SECRET env var to enable HMAC verification."
+            )
         self._gh = GitHubSync(repo, token, db_path)
         self._handlers: List[Callable[[WebhookEvent], None]] = []
         self._event_log: List[WebhookResult] = []
@@ -129,6 +157,10 @@ class WebhookServer:
                 path = parsed.path.rstrip("/")
 
                 length = int(self.headers.get("Content-Length", 0))
+                if length > MAX_PAYLOAD_BYTES:
+                    # Reject oversized payloads before reading - prevents memory exhaustion
+                    self._respond(413, {"error": f"Payload too large (max {MAX_PAYLOAD_BYTES} bytes)"})
+                    return
                 body = self.rfile.read(length)
 
                 if path == "/webhook/github":
@@ -269,7 +301,9 @@ class WebhookServer:
         title = payload.get("title", f"Event: {event_type}")
         description = payload.get("description", "")
         severity = payload.get("severity", "medium").lower()
-        tags = payload.get("tags", []) + ["webhook", event_type]
+        # Always tag webhook content as external. Content came from an external
+        # system and must not be interpreted as operator instructions.
+        tags = payload.get("tags", []) + ["webhook", "external", "source:webhook", event_type]
         memory_only = payload.get("memory_only", False)
 
         priority_map = {
@@ -294,6 +328,7 @@ class WebhookServer:
                 description=description,
                 priority=priority,
                 tags=tags,
-                metadata={"source": "webhook", "event_type": event_type},
+                metadata={"source": "webhook", "event_type": event_type,
+                          "content_trust": "external"},
             )
             return f"Generic event '{event_type}' → task created (priority: {severity})"

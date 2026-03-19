@@ -10,6 +10,28 @@ A handoff is not just a task description. It is operational context:
 what was done, what wasn't, what was learned, what the next agent
 should do first. It is written by an agent for an agent.
 
+TRUST MODEL
+-----------
+Handoff files live in the repo. Anyone with write access to the repo can
+create or modify them. This means:
+
+1. CHECKSUM VERIFICATION: Each handoff includes a SHA256 checksum of its
+   content fields. `load()` verifies it and raises TamperedHandoffError on
+   mismatch. This detects file modification after creation.
+   It does NOT prevent an adversary who creates a new valid handoff from scratch.
+
+2. TRUST THE DIRECTORY, NOT THE FILE: Only run `find_and_apply()` against
+   directories you trust. A `handoffs/` directory in a public repo is less
+   trusted than one in a private repo. Apply appropriate skepticism.
+
+3. CONTENT IS STILL DATA: Even a legitimate handoff from a trusted agent
+   contains user-generated context (GitHub issues, human instructions, etc.)
+   that may itself contain prompt injection attempts. The embedded bundle
+   preserves the `external` tags from the original sources.
+
+4. VERIFY THE SOURCE: Check `handoff.from_agent` against your contacts list
+   if you need to trust only known agents.
+
 Usage (outgoing - agent finishing work):
 
     ho = HandoffManager()
@@ -39,6 +61,7 @@ Usage (incoming - agent starting work):
         print(handoff.briefing())   # read before starting work
 """
 
+import hashlib
 import json
 import time
 import uuid
@@ -54,6 +77,25 @@ from .tasks import Priority
 
 HANDOFF_VERSION = "1.0"
 HANDOFF_FILENAME_PREFIX = "nexus-handoff-"
+
+
+class TamperedHandoffError(ValueError):
+    """Raised when a handoff file's checksum doesn't match its content.
+
+    The file was modified after creation. Do not apply it.
+    Either it was tampered with, or it was manually edited (in which case
+    recalculate the checksum by re-creating the handoff).
+    """
+
+
+def _compute_checksum(d: dict) -> str:
+    """SHA256 of the content fields that matter for trust verification.
+
+    Excludes 'checksum' and 'status' (status changes on acknowledge).
+    """
+    fields = {k: v for k, v in d.items() if k not in ("checksum", "status")}
+    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 @dataclass
@@ -136,7 +178,7 @@ class Handoff:
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "id": self.id,
             "version": self.version,
             "created_at": self.created_at,
@@ -153,9 +195,27 @@ class Handoff:
             "bundle": self.bundle,
             "status": self.status,
         }
+        # Checksum covers all content fields except status (status changes on ack)
+        # and checksum itself. Detects file tampering after creation.
+        d["checksum"] = _compute_checksum(d)
+        return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Handoff":
+    def from_dict(cls, d: dict, verify: bool = True) -> "Handoff":
+        """Load a handoff from a dict.
+
+        verify=True (default): raises TamperedHandoffError if the checksum
+        doesn't match. Set verify=False only for legacy files without checksums.
+        """
+        stored_checksum = d.get("checksum")
+        if verify and stored_checksum:
+            expected = _compute_checksum(d)
+            if not expected == stored_checksum:
+                raise TamperedHandoffError(
+                    f"Handoff {d.get('id', '?')[:8]} checksum mismatch. "
+                    "The file may have been tampered with or manually edited. "
+                    "Do not apply this handoff."
+                )
         return cls(
             id=d["id"],
             version=d.get("version", HANDOFF_VERSION),
@@ -275,12 +335,19 @@ class HandoffManager:
         if not directory.is_dir():
             return None
 
+        import logging
+        _log = logging.getLogger(__name__)
+
         handoffs = []
         for fp in directory.glob(f"{HANDOFF_FILENAME_PREFIX}*.json"):
             try:
                 h = self.load(fp)
                 if h.status == status:
                     handoffs.append((fp.stat().st_mtime, h))
+            except TamperedHandoffError as e:
+                # Log prominently - tampered files should not pass silently
+                _log.warning(f"SKIPPING tampered handoff file {fp.name}: {e}")
+                continue
             except Exception:
                 continue
 
