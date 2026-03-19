@@ -59,7 +59,7 @@ cm.reflection.reflect(
     effort_mins=30,                   # optional but useful for growth tracking
 )
 ```
-
+  
 The `lesson` field is automatically stored as a **procedural memory** and will surface in future sessions. If you skip the lesson, the knowledge dies with the session.
 
 ---
