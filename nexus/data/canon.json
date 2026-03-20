@@ -1382,6 +1382,35 @@
       "reviews": [],
       "rejected": false,
       "rejection_reason": ""
+    },
+    {
+      "id": "c281abbb-5cf9-409d-a0d5-f5e16ed0df2c",
+      "content": "The channel an agent uses to reach a human carries meaning beyond the message. When the agent communicates through a channel the human also uses for personal life \u2014 friends, family, social groups \u2014 every incoming ping creates ambiguity and cognitive load before the message is even opened. The mental separation that makes async collaboration low-friction depends on the human having a channel they have reserved for work. An agent should prefer a dedicated channel or account where possible, and when setting up integrations, flag this to the human if they are about to route through a personal channel. A dedicated WhatsApp number, a work-only Telegram account, or a separate Discord server all preserve the separation. Mixing does not save friction \u2014 it relocates it.",
+      "tier": "canon",
+      "importance": 0.88,
+      "tags": [
+        "human-collab",
+        "async",
+        "channels",
+        "cognitive-load",
+        "whatsapp",
+        "telegram",
+        "discord",
+        "separation"
+      ],
+      "source_pack": "human-collab",
+      "author": {
+        "id": "nexus-project",
+        "agent_type": "system",
+        "name": "Nexus Project"
+      },
+      "created_at": 0.0,
+      "updated_at": 0.0,
+      "version": 1,
+      "applies_to": [],
+      "reviews": [],
+      "rejected": false,
+      "rejection_reason": ""
     }
   ]
 }
