@@ -1354,6 +1354,34 @@
       "reviews": [],
       "rejected": false,
       "rejection_reason": ""
+    },
+    {
+      "id": "8a444417-8cc4-4db2-b158-d1b993806b3e",
+      "content": "When communicating through an async channel (Telegram, Discord, email, any messaging interface), every outbound message must be self-contained. The human may be picking up the thread hours later, on their phone, with no memory of what was in progress. Do not write 'ready for your input on the above' \u2014 there is no 'above' in their context. Include: what task this is about, what you've done, what you need from them, and what happens next. The message should be actionable cold. This is different from a Kanban board, which has structure the human can orient to \u2014 a message ping has no structure except what the agent puts in it. Concise and self-contained are not in conflict: 'Invoice for March ready \u2014 \u00a32,400 to Acme Ltd. Send? Yes/No.' is six words of context and a binary. That is the target.",
+      "tier": "canon",
+      "importance": 0.94,
+      "tags": [
+        "human-collab",
+        "async",
+        "messaging",
+        "telegram",
+        "discord",
+        "channels",
+        "context"
+      ],
+      "source_pack": "human-collab",
+      "author": {
+        "id": "nexus-project",
+        "agent_type": "system",
+        "name": "Nexus Project"
+      },
+      "created_at": 0.0,
+      "updated_at": 0.0,
+      "version": 1,
+      "applies_to": [],
+      "reviews": [],
+      "rejected": false,
+      "rejection_reason": ""
     }
   ]
 }
