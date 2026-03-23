@@ -1,0 +1,56 @@
+{
+  "schema_version": "1",
+  "generated_at": "2026-03-23T09:00:00+00:00",
+  "date": "2026-03-23",
+  "item_count": 3,
+  "items": [
+    {
+      "id": "a3f1c2b4d5e60789",
+      "headline": "Anthropic raises claude-opus-4-6 rate limits for Tier 3",
+      "source_id": "anthropic-blog",
+      "source_url": "https://www.anthropic.com/blog/rate-limits-update",
+      "published": "2026-03-22T18:00:00+00:00",
+      "fetched": "2026-03-23T09:00:00+00:00",
+      "category": "api-change",
+      "impact": "high",
+      "summary": "Anthropic has increased rate limits for claude-opus-4-6 on Tier 3 plans from 40 RPM to 100 RPM and from 400K TPM to 800K TPM. Changes are effective immediately with no migration required.",
+      "implications": [
+        "Tier 3 agents can now run higher-parallelism workloads on opus without hitting rate limits",
+        "Review retry backoff logic — previous conservative limits may no longer apply"
+      ],
+      "tags": ["claude-opus-4-6", "rate-limits", "api", "tier-3"]
+    },
+    {
+      "id": "b8e21f3a9c047d56",
+      "headline": "OpenClaw 2.3 removes --no-safety flag, adds mandatory audit log",
+      "source_id": "openclaw-github",
+      "source_url": "https://github.com/OpenClaw/OpenClaw/releases/tag/v2.3.0",
+      "published": "2026-03-22T14:30:00+00:00",
+      "fetched": "2026-03-23T09:00:00+00:00",
+      "category": "tooling",
+      "impact": "critical",
+      "summary": "OpenClaw 2.3 is a breaking release: the --no-safety flag is removed and all sessions now write a mandatory audit log to ~/.openclaw/audit.jsonl. Existing scripts using --no-safety will error on upgrade.",
+      "implications": [
+        "Remove --no-safety from all OpenClaw invocations before upgrading — flag now causes startup error",
+        "Ensure write access to ~/.openclaw/ or override OPENCLAW_AUDIT_PATH in environments with restricted home dirs"
+      ],
+      "tags": ["openclaw", "breaking-change", "safety", "audit-log"]
+    },
+    {
+      "id": "c4d9e0f1a2b38c7e",
+      "headline": "MCP specification adds streamable-http transport (replaces SSE)",
+      "source_id": "modelcontextprotocol",
+      "source_url": "https://github.com/modelcontextprotocol/specification/releases/tag/2026-03-22",
+      "published": "2026-03-22T10:00:00+00:00",
+      "fetched": "2026-03-23T09:00:00+00:00",
+      "category": "tooling",
+      "impact": "medium",
+      "summary": "MCP spec 2026-03-22 introduces streamable-http as the preferred transport for remote servers, deprecating the previous SSE-based approach. Existing SSE servers remain supported but will not receive new features.",
+      "implications": [
+        "New MCP servers should implement streamable-http; SSE still works but is on deprecation track",
+        "Check SDK version — clients need mcp>=1.5.0 to negotiate streamable-http"
+      ],
+      "tags": ["mcp", "transport", "deprecation", "streaming"]
+    }
+  ]
+}
