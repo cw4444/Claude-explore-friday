@@ -121,6 +121,16 @@ def load_open(path: Path | None = None) -> list[IncidentReport]:
     return [i for i in load_all(path) if i.status in ("open", "confirmed")]
 
 
+def load_recently_resolved(since_hours: int = 48, path: Path | None = None) -> list[IncidentReport]:
+    """Incidents resolved within the last N hours — shown in dispatch as closures."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).isoformat()
+    return [
+        i for i in load_all(path)
+        if i.status == "resolved" and i.resolved_at and i.resolved_at >= cutoff
+    ]
+
+
 def get_by_id(incident_id: str, path: Path | None = None) -> IncidentReport | None:
     for inc in load_all(path):
         if inc.id == incident_id:

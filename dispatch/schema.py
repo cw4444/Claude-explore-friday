@@ -72,6 +72,8 @@ class Dispatch:
     items: list[DispatchItem] = field(default_factory=list)
     # Community incident alerts — open/confirmed reports from the incident log
     community_alerts: list[dict] = field(default_factory=list)
+    # Recently resolved incidents — safe to stop worrying about these
+    resolutions: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         # Sort: critical first, then high, medium, low
@@ -87,6 +89,9 @@ class Dispatch:
         if self.community_alerts:
             d["community_alert_count"] = len(self.community_alerts)
             d["community_alerts"] = self.community_alerts
+        if self.resolutions:
+            d["resolution_count"] = len(self.resolutions)
+            d["resolutions"] = self.resolutions
         return d
 
     def to_json(self, indent: int = 2) -> str:

@@ -18,7 +18,7 @@ import sys
 
 from .sources import fetch_all, RSS_SOURCES, GITHUB_RELEASE_SOURCES
 from .processor import curate
-from .incidents.store import load_open
+from .incidents.store import load_open, load_recently_resolved
 
 
 def configure_logging(verbose: bool) -> None:
@@ -117,6 +117,21 @@ def main() -> None:
             for i in open_incidents
         ]
         log.info(f"Attached {len(open_incidents)} community alert(s) to dispatch")
+
+    resolved = load_recently_resolved()
+    if resolved:
+        dispatch.resolutions = [
+            {
+                "id": i.id,
+                "tool": i.tool,
+                "failure": i.failure,
+                "resolved_at": i.resolved_at,
+                "resolution_note": i.resolution_note,
+                "tags": i.tags,
+            }
+            for i in resolved
+        ]
+        log.info(f"Attached {len(resolved)} resolution(s) to dispatch")
 
     indent = 2 if args.pretty else None
     payload = dispatch.to_json(indent=indent or 0)
