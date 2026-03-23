@@ -18,6 +18,7 @@ import sys
 
 from .sources import fetch_all, RSS_SOURCES, GITHUB_RELEASE_SOURCES
 from .processor import curate
+from .incidents.store import load_open
 
 
 def configure_logging(verbose: bool) -> None:
@@ -97,6 +98,25 @@ def main() -> None:
         sys.exit(1)
 
     dispatch = curate(raw_items, api_key=api_key)
+
+    # Attach open community incidents as a "letters to the editor" section
+    open_incidents = load_open()
+    if open_incidents:
+        dispatch.community_alerts = [
+            {
+                "id": i.id,
+                "tool": i.tool,
+                "severity": i.severity,
+                "status": i.status,
+                "failure": i.failure,
+                "workaround": i.workaround,
+                "confirmed_by": i.confirmed_by,
+                "reported_at": i.reported_at,
+                "tags": i.tags,
+            }
+            for i in open_incidents
+        ]
+        log.info(f"Attached {len(open_incidents)} community alert(s) to dispatch")
 
     indent = 2 if args.pretty else None
     payload = dispatch.to_json(indent=indent or 0)

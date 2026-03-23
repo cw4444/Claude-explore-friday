@@ -70,18 +70,24 @@ class Dispatch:
     generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     date: str = field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     items: list[DispatchItem] = field(default_factory=list)
+    # Community incident alerts — open/confirmed reports from the incident log
+    community_alerts: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         # Sort: critical first, then high, medium, low
         order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         sorted_items = sorted(self.items, key=lambda i: order[i.impact])
-        return {
+        d = {
             "schema_version": self.schema_version,
             "generated_at": self.generated_at,
             "date": self.date,
             "item_count": len(self.items),
             "items": [i.to_dict() for i in sorted_items],
         }
+        if self.community_alerts:
+            d["community_alert_count"] = len(self.community_alerts)
+            d["community_alerts"] = self.community_alerts
+        return d
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent)

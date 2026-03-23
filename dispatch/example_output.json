@@ -3,6 +3,31 @@
   "generated_at": "2026-03-23T09:00:00+00:00",
   "date": "2026-03-23",
   "item_count": 3,
+  "community_alert_count": 2,
+  "community_alerts": [
+    {
+      "id": "inc-f3a19c02",
+      "tool": "mcp-filesystem",
+      "severity": "high",
+      "status": "confirmed",
+      "failure": "left 47 open file handles after timeout, causing subsequent calls to hang indefinitely",
+      "workaround": "call tool.close() explicitly before any gc boundary; set timeout=5s max",
+      "confirmed_by": 3,
+      "reported_at": "2026-03-21T14:22:00+00:00",
+      "tags": ["mcp", "filesystem", "file-handles", "timeout"]
+    },
+    {
+      "id": "inc-8b2de541",
+      "tool": "web-search-20260209",
+      "severity": "medium",
+      "status": "open",
+      "failure": "returns HTTP 200 with empty hits array for queries containing special characters (parens, slashes)",
+      "workaround": "strip special chars from query before passing to tool",
+      "confirmed_by": 1,
+      "reported_at": "2026-03-22T09:10:00+00:00",
+      "tags": ["web-search", "special-characters", "query"]
+    }
+  ],
   "items": [
     {
       "id": "a3f1c2b4d5e60789",
